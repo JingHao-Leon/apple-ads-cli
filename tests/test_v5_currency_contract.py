@@ -1,13 +1,15 @@
 """Currency safety contracts for legacy Campaign Management API v5 writes."""
 
 import ast
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from click import unstyle
 from typer.testing import CliRunner
 
-from asa_cli.commands import adgroups, budget, campaigns, keywords
+from asa_cli.commands import adgroups, budget, campaigns, keywords, reports
+from asa_cli.v5.api import ReportRows
 
 ROOT = Path(__file__).resolve().parents[1]
 runner = CliRunner()
@@ -149,3 +151,57 @@ def test_budget_order_preview_uses_resolved_eur_currency():
     assert result.exit_code == 0, result.output
     assert "1,000.00 EUR" in unstyle(result.output)
     assert "$" not in unstyle(result.output)
+
+
+class ReportsClient:
+    """Report fixture whose money is denominated in a non-USD organization currency."""
+
+    campaigns = [{"id": 42, "name": "DE Exact", "displayStatus": "RUNNING"}]
+
+    def get_campaigns(self):
+        return self.campaigns
+
+    def get_campaign_report(self, campaign_id, start, end, granularity="DAILY"):
+        total = {
+            "impressions": 100,
+            "taps": 10,
+            "totalInstalls": 2,
+            "localSpend": {"amount": "25.00", "currency": "EUR"},
+        }
+        return ReportRows(
+            [{"metadata": {"campaignId": campaign_id}, "total": total}],
+            grand_totals=total,
+        )
+
+
+def _invoke_reports(arguments):
+    client = ReportsClient()
+    with (
+        patch.object(reports, "load_credentials", return_value=object()),
+        patch.object(reports, "SearchAdsClient", return_value=client),
+        patch.object(reports, "_resolve_app_name", return_value=None),
+    ):
+        return runner.invoke(reports.app, arguments), client
+
+
+def test_report_summary_labels_spend_with_the_reported_currency():
+    result, _ = _invoke_reports(
+        ["summary", "--start", "2024-01-01", "--end", "2024-01-07"]
+    )
+
+    assert result.exit_code == 0, result.output
+    output = unstyle(result.output)
+    assert "$" not in output
+    assert "25.00 EUR" in output
+    assert "12.50 EUR" in output
+
+
+def test_report_summary_json_output_carries_the_money_currency():
+    result, _ = _invoke_reports(
+        ["summary", "--start", "2024-01-01", "--end", "2024-01-07", "--json"]
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["currency"] == "EUR"
+    assert payload["totals"]["spend"] == 25.0

@@ -184,7 +184,9 @@ def _invoke_reports(arguments):
         return runner.invoke(reports.app, arguments), client
 
 
-def test_report_summary_labels_spend_with_the_reported_currency():
+def test_report_summary_labels_spend_with_the_reported_currency(monkeypatch):
+    # Give the table room so currency labels are not wrapped across lines.
+    monkeypatch.setenv("COLUMNS", "200")
     result, _ = _invoke_reports(
         ["summary", "--start", "2024-01-01", "--end", "2024-01-07"]
     )

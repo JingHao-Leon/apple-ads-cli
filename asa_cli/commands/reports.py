@@ -28,7 +28,7 @@ from ..reporting import (
     performance_totals,
     performance_totals_from_metrics,
 )
-from ..v5.api import REPORTING_TIME_ZONE, SearchAdsAPIError, SearchAdsClient
+from ..v5.api import REPORTING_TIME_ZONE, SearchAdsClient
 
 app = typer.Typer(help="Reporting and analytics commands")
 console = Console()
@@ -139,17 +139,27 @@ def _reported_currency(payload: Any) -> Optional[str]:
 def _organization_currency(client: Any) -> Optional[str]:
     """Return the configured organization currency when the client resolves one.
 
-    A missing organization ID or an ACL without a currency is not a report
-    failure: the money is then rendered without a currency label rather than
-    with a wrong one.
+    A client that cannot resolve a currency at all is not a report failure:
+    the money is then rendered without a currency label rather than with a
+    wrong one. A currency lookup that *fails* is a different thing and is
+    left to propagate — see the comment below.
     """
     resolver = getattr(client, "get_org_currency", None)
     if not callable(resolver):
         return None
     try:
         currency = resolver()
-    except (SearchAdsAPIError, ValueError):
+    except ValueError:
+        # No credentials configured. The commands already guard for that
+        # before reaching the report path, so it is not a report failure.
         return None
+    # A failed ACL request is a failure, not missing data, and it is left to
+    # propagate. SearchAdsClient._request prints the error to stdout before
+    # raising, so swallowing it here would emit invalid JSON and still exit 0
+    # — which the repository's own contract
+    # (references/safety-and-output-contracts.md) forbids: HTTP failures must
+    # exit nonzero, never a healthy no-op. Every other API call in this module
+    # already propagates, and this one now does the same.
     return currency.strip().upper() if isinstance(currency, str) and currency.strip() else None
 
 
